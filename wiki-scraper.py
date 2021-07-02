@@ -4,11 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 from mwclient import Site
 import json
 import os
+import platform
 import plistlib
 import re
 import remotezip
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -80,6 +82,9 @@ class BetaScraper(object):
                 json.dump(sorted(self.api[device], key=lambda firm: firm['version'], reverse=True), f)
 
 def main():
+    if platform.system() == 'Windows':
+        sys.exit('[ERROR] Windows is not supported. Exiting.')
+
     start_time = time.time()
     device_types = ('Apple TV', 'iPad', 'iPad Air', 'iPad Pro', 'iPad Mini', 'iPhone', 'iPod touch')
     scraper = BetaScraper(Site('www.theiphonewiki.com'))
