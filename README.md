@@ -1,5 +1,6 @@
 # Beta Firmware API
-This is a python script that scrapes information on beta iOS firmwares from [The iPhone Wiki](https://www.theiphonewiki.com/), fetches the signing status of the firmwares, then writes the data out as JSON, in a format similar to [IPSW.me](https://ipswdownloads.docs.apiary.io/)'s API. 
+This is a python script that scrapes information on beta iOS firmwares from [The iPhone Wiki](https://www.theiphonewiki.com/), fetches the signing status of the firmwares, then writes the data out as JSON, in a format similar to [IPSW.me](https://ipswdownloads.docs.apiary.io/)'s API. I'm also hosting this API for others to use (updated every 3 hours):
+`https://api.m1sta.xyz/betas/{identifier}`.
 
 ## Requirements
 - A computer running macOS or Linux
