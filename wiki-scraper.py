@@ -85,6 +85,9 @@ def main():
     if platform.system() == 'Windows':
         sys.exit('[ERROR] Windows is not supported. Exiting.')
 
+    if shutil.which('tsschecker') is None:
+        sys.exit('[ERROR] tsschecker is not installed. Exiting.')
+
     start_time = time.time()
     device_types = ('Apple TV', 'iPad', 'iPad Air', 'iPad Pro', 'iPad Mini', 'iPhone', 'iPod touch')
     scraper = BetaScraper(Site('www.theiphonewiki.com'))
