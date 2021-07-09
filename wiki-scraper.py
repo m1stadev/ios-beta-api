@@ -79,7 +79,7 @@ class BetaScraper(object):
         os.mkdir(path)
         for device in self.api.keys():
             with open(f'{path}/{device}', 'w') as f:
-                json.dump(sorted(self.api[device], key=lambda firm: firm['version'], reverse=True), f)
+                json.dump(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True), f)
 
 def main():
     if platform.system() == 'Windows':
