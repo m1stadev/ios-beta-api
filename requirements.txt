@@ -1,2 +1,3 @@
 mwclient
 remotezip
+requests

@@ -7,6 +7,7 @@ import os
 import platform
 import plistlib
 import re
+import requests
 import remotezip
 import shutil
 import subprocess
@@ -51,10 +52,14 @@ class BetaScraper(object):
             with open('/'.join((tmpdir, manifest)), 'rb') as f:
                 bm = plistlib.load(f)
 
+            api = requests.get(f"https://api.ipsw.me/v4/device/{bm['SupportedProductTypes'][0]}").json()
+
             args = (
                 'tsschecker',
+                '-d',
+                bm['SupportedProductTypes'][0],
                 '-B',
-                bm['BuildIdentities'][0]['Info']['DeviceClass'],
+                api['boards'][0]['boardconfig'],
                 '-m',
                 f'{tmpdir}/{manifest}'
             )
