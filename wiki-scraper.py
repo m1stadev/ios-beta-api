@@ -14,30 +14,64 @@ import subprocess
 import sys
 import tempfile
 import time
+import wikitextparser as wtp
 
 
-class BetaScraper(object):
+class Firmware:
+    def __init__(self, firm):
+        self.version = firm[0]
+        self.buildid = firm[1]
+        self.url = firm[2]
+        self.size = firm[3]
+        self.raw = firm
+
+class BetaScraper:
     def __init__(self, site):
         self.site = site
         self.api = dict()
 
-    def grab_pages(self, filters):
-        pages = list()
+    def build_api(self, filters):
+        device_regex = re.compile('(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
         for result in self.site.search('Beta Firmware/'):
             if any(x in result['title'] for x in filters) and '.x' in result['title']:
-                pages.append(result['title'])
+                wiki_page = wtp.parse(self.site.pages[result['title']].text())
+                for t in range(len(wiki_page.tables)):
+                    for ver in range(1, len(wiki_page.tables[t].data())):
+                        try:
+                            devices = wtp.parse(wiki_page.tables[t].data()[ver][2]).wikilinks
+                        except: # some parsing issue i haven't fixed yet, just skip the page
+                            continue
 
-        return pages
+                        for d in range(len(devices)):
+                            try:
+                                devices[d] = device_regex.search(str(devices[d])).group()
+                            except AttributeError: # Sometimes baseband versions get included in the list of devices for some reason, so we'll skip
+                                devices.pop(d)
 
-    def grab_urls(self, pages):
-        urls = list()
-        for page in pages:
-            page_regex = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', self.site.pages[page].text())
-            [urls.append(url) for url in page_regex if url.endswith('.ipsw') and url not in urls]
+                        template = [wiki_page.tables[t].data()[0].index(x) for x in wiki_page.tables[t].data()[0] if any(i == x for i in ('Version', 'Build', 'Download URL', 'File Size'))]
+                        if len(wiki_page.tables[t].data()[0]) > len([x for x in wiki_page.tables[t].data()[ver] if x is not None]): # Similar issue to above ^
+                            for x in range(len(template)):
+                                if template[x] > 1:
+                                    template[x] = template[x] - 1
 
-        return urls
+                        firm = [x for x in wiki_page.tables[t].data()[ver] if wiki_page.tables[t].data()[ver].index(x) in template]
+                        if len(firm) != 4: # Incomplete firmware info, skipping
+                            continue
 
-    def scrape_firm(self, url):
+                        firm = Firmware(firm)
+                        for device in devices:
+                            if device not in self.api.keys():
+                                self.api[device] = list()
+
+                            if not any(f['buildid'] == firm.buildid for f in self.api[device]):
+                                self.api[device].append({
+                                    'version': firm.version,
+                                    'buildid': firm.buildid,
+                                    'url': firm.url,
+                                    'size': firm.size,
+                                })
+
+    def scrape_firm(self, url): #TODO: Update this function to only check signing status
         if any(domain in url for domain in ('developer.apple.com', 'adcdownload.apple.com')): # Inaccessible domains
             return
 
@@ -98,12 +132,12 @@ def main():
     scraper = BetaScraper(Site('www.theiphonewiki.com'))
 
     print('[1] Scraping The iPhone Wiki...')
-    pages = scraper.grab_pages(device_types)
+    pages = scraper.build_api(device_types)
+    print('[4] Writing out API...')
+    scraper.write_api('betas')
+    exit()
 
-    print('[2] Scraping beta IPSW URLs...')
-    urls = scraper.grab_urls(pages)
-
-    print('[3] Grabbing rest of info from IPSWs (this will take a while, please wait)...')
+    print('[3] Grabbing signing status (this will take a while, please wait)...')
     with ThreadPoolExecutor() as executor:
         for url in urls:
             executor.submit(scraper.scrape_firm, url)
