@@ -39,7 +39,7 @@ class BetaScraper:
                     for ver in range(1, len(wiki_page.tables[t].data())):
                         try:
                             devices = wtp.parse(wiki_page.tables[t].data()[ver][2]).wikilinks
-                        except: # some parsing issue i haven't fixed yet, just skip the page
+                        except: # Some parsing issue I haven't fixed yet, just skip the firmware
                             continue
 
                         for d in range(len(devices)):
