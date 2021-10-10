@@ -71,7 +71,7 @@ class BetaScraper:
                                     'size': firm.size,
                                 })
 
-    def scrape_firm(self, url): #TODO: Update this function to only check signing status
+    def scrape_firm(self, url): #TODO: Update this function to only check signing status + remove tsschecker dependency
         if any(domain in url for domain in ('developer.apple.com', 'adcdownload.apple.com')): # Inaccessible domains
             return
 
