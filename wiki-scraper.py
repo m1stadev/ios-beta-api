@@ -63,7 +63,7 @@ class BetaScraper:
                         if (word.isnumeric()) and int(word) > 10:
                             ipsw_sizes.append(int(word))
 
-                    if len(ipsw_sizes) == len(ipsws): # One or more IPSWs don't have filesizes, skip
+                    if len(ipsw_sizes) != len(ipsws): # One or more IPSWs don't have filesizes, skip
                         continue
 
                     for d in range(len(devices)):
