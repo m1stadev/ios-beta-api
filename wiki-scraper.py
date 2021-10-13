@@ -17,59 +17,71 @@ import time
 import wikitextparser as wtp
 
 
-class Firmware:
-    def __init__(self, firm):
-        self.version = firm[0]
-        self.buildid = firm[1]
-        self.url = firm[2]
-        self.size = firm[3]
-        self.raw = firm
-
 class BetaScraper:
     def __init__(self, site):
         self.site = site
         self.api = dict()
 
-    def build_api(self, filters):
-        device_regex = re.compile('(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
+    def build_api(self):
+        device_regex = re.compile(r'(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
+        device_types = ('Apple TV', 'iPad', 'iPad Air', 'iPad Pro', 'iPad Mini', 'iPhone', 'iPod touch')
         for result in self.site.search('Beta Firmware/'):
-            if any(x in result['title'] for x in filters) and '.x' in result['title']:
-                wiki_page = wtp.parse(self.site.pages[result['title']].text())
-                for t in range(len(wiki_page.tables)):
-                    for ver in range(1, len(wiki_page.tables[t].data())):
-                        try:
-                            devices = wtp.parse(wiki_page.tables[t].data()[ver][2]).wikilinks
-                        except: # Some parsing issue I haven't fixed yet, just skip the firmware
+            if ('.x' not in result['title']) or (not any(x in result['title'] for x in device_types)):
+                continue
+
+            major_version = int(result['title'].split('/')[2][:-2])
+            if major_version < 9 if 'Apple TV' not in result['title'] else 7: # All beta firmwares pre-iOS 9/tvOS 7 aren't IPSW beta firmwares
+                continue
+
+            wiki_page = wtp.parse(self.site.pages[result['title']].text())
+            for table in wiki_page.tables:
+                template = table.data()[0]
+                for firm in range(1, len(table.data())):
+                    firm_data = [x for x in table.data()[firm] if x is not None]
+                    devices = list()
+
+                    for device in wtp.parse(firm_data[next(template.index(x) for x in template if any(i in x for i in ('Codename', 'Keys')))]).wikilinks:
+                        regex = device_regex.match(str(device.text))
+                        if regex is not None:
+                            devices.append(regex.group())
+
+                    firm = {
+                        'version': firm_data[0],
+                        'buildid': firm_data[1]
+                    }
+
+                    try:
+                        ipsws = next(wtp.parse(item).external_links for item in firm_data if wtp.parse(item).external_links)
+                    except: # No URLs for this firmware, skip
+                        continue
+
+                    if not any(ipsw.url.endswith('.ipsw') for ipsw in ipsws): # Only IPSW beta firmwares are scraped
+                        continue
+
+                    ipsw_sizes = list()
+                    for word in [x.replace(',', '').replace('\n', '') for x in firm_data[-1].split(' ')]:
+                        if (word.isnumeric()) and int(word) > 10:
+                            ipsw_sizes.append(int(word))
+
+                    if len(ipsw_sizes) == len(ipsws): # One or more IPSWs don't have filesizes, skip
+                        continue
+
+                    for d in range(len(devices)):
+                        firm['url'] = ipsws[0].url
+                        firm['size'] = ipsw_sizes[0]
+
+                        if (len(ipsws) > 1) and (d not in (0, 1)):
+                            firm['url'] = ipsws[1].url
+                            firm['size'] = ipsw_sizes[1]
+
+                        if len(firm.keys()) < 4: # Incomplete firmware info, skipping
                             continue
 
-                        for d in range(len(devices)):
-                            try:
-                                devices[d] = device_regex.search(str(devices[d])).group()
-                            except AttributeError: # Sometimes baseband versions get included in the list of devices for some reason, so we'll skip
-                                devices.pop(d)
+                        if devices[d] not in self.api.keys():
+                            self.api[devices[d]] = list()
 
-                        template = [wiki_page.tables[t].data()[0].index(x) for x in wiki_page.tables[t].data()[0] if any(i == x for i in ('Version', 'Build', 'Download URL', 'File Size'))]
-                        if len(wiki_page.tables[t].data()[0]) > len([x for x in wiki_page.tables[t].data()[ver] if x is not None]): # Similar issue to above ^
-                            for x in range(len(template)):
-                                if template[x] > 1:
-                                    template[x] = template[x] - 1
-
-                        firm = [x for x in wiki_page.tables[t].data()[ver] if wiki_page.tables[t].data()[ver].index(x) in template]
-                        if len(firm) != 4: # Incomplete firmware info, skipping
-                            continue
-
-                        firm = Firmware(firm)
-                        for device in devices:
-                            if device not in self.api.keys():
-                                self.api[device] = list()
-
-                            if not any(f['buildid'] == firm.buildid for f in self.api[device]):
-                                self.api[device].append({
-                                    'version': firm.version,
-                                    'buildid': firm.buildid,
-                                    'url': firm.url,
-                                    'size': firm.size,
-                                })
+                        if not any(f['buildid'] == firm['buildid'] for f in self.api[devices[d]]):
+                            self.api[devices[d]].append(firm)
 
     def scrape_firm(self, url): #TODO: Update this function to only check signing status + remove tsschecker dependency
         if any(domain in url for domain in ('developer.apple.com', 'adcdownload.apple.com')): # Inaccessible domains
@@ -118,7 +130,7 @@ class BetaScraper:
         os.mkdir(path)
         for device in self.api.keys():
             with open(f'{path}/{device}', 'w') as f:
-                json.dump(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True), f)
+                json.dump(sorted(self.api[device], key=lambda firm: firm['version'], reverse=True), f, indent=4)
 
 def main():
     if platform.system() == 'Windows':
@@ -128,11 +140,10 @@ def main():
         sys.exit('[ERROR] tsschecker is not installed. Exiting.')
 
     start_time = time.time()
-    device_types = ('Apple TV', 'iPad', 'iPad Air', 'iPad Pro', 'iPad Mini', 'iPhone', 'iPod touch')
     scraper = BetaScraper(Site('www.theiphonewiki.com'))
 
     print('[1] Scraping The iPhone Wiki...')
-    pages = scraper.build_api(device_types)
+    pages = scraper.build_api()
     print('[4] Writing out API...')
     scraper.write_api('betas')
     exit()
