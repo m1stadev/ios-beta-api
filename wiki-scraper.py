@@ -46,7 +46,7 @@ class BetaScraper:
                             devices.append(regex.group())
 
                     firm = {
-                        'version': firm_data[0],
+                        'version': firm_data[0], #TODO: Fix parsing of GM/RC builds
                         'buildid': firm_data[1]
                     }
 
