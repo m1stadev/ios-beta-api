@@ -5,7 +5,6 @@ from mwclient import Site
 import json
 import os
 import platform
-import plistlib
 import re
 import requests
 import remotezip
@@ -60,7 +59,7 @@ class BetaScraper:
 
                     ipsw_sizes = list()
                     for word in [x.replace(',', '').replace('\n', '') for x in firm_data[-1].split(' ')]:
-                        if (word.isnumeric()) and int(word) > 10:
+                        if (word.isnumeric()) and (int(word) > 10):
                             ipsw_sizes.append(int(word))
 
                     if len(ipsw_sizes) != len(ipsws): # One or more IPSWs don't have filesizes, skip
@@ -83,45 +82,30 @@ class BetaScraper:
                         if not any(f['buildid'] == firm['buildid'] for f in self.api[devices[d]]):
                             self.api[devices[d]].append(firm)
 
-    def scrape_firm(self, url): #TODO: Update this function to only check signing status + remove tsschecker dependency
-        if any(domain in url for domain in ('developer.apple.com', 'adcdownload.apple.com')): # Inaccessible domains
-            return
-
+    def get_signing_status(self, device): #TODO: Remove tsschecker dependency
+        boardconfig = requests.get(f'https://api.ipsw.me/v4/device/{device}').json()['boards'][0]['boardconfig']
         with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                with remotezip.RemoteZip(url) as ipsw:
-                    manifest = next(f for f in ipsw.namelist() if 'Manifest' in f)
-                    ipsw.extract(manifest, tmpdir)
-            except:
-                return
+            for firm in self.api[device]:
+                try:
+                    with remotezip.RemoteZip(firm['url']) as ipsw:
+                        manifest = next(f for f in ipsw.namelist() if 'Manifest' in f)
+                        ipsw.extract(manifest, tmpdir)
+                except:
+                    self.api[device].pop(self.api[device].index(firm))
+                    continue
 
-            with open('/'.join((tmpdir, manifest)), 'rb') as f:
-                bm = plistlib.load(f)
+                args = (
+                    'tsschecker',
+                    '-d',
+                    device,
+                    '-B',
+                    boardconfig,
+                    '-m',
+                    f'{tmpdir}/{manifest}'
+                )
 
-            api = requests.get(f"https://api.ipsw.me/v4/device/{bm['SupportedProductTypes'][0]}").json()
-
-            args = (
-                'tsschecker',
-                '-d',
-                bm['SupportedProductTypes'][0],
-                '-B',
-                api['boards'][0]['boardconfig'],
-                '-m',
-                f'{tmpdir}/{manifest}'
-            )
-
-            tsschecker = subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True)
-
-        for device in bm['SupportedProductTypes']:
-            if device not in self.api.keys():
-                self.api[device] = list()
-
-            self.api[device].append({
-                'version': bm['ProductVersion'],
-                'buildid': bm['ProductBuildVersion'],
-                'url': url,
-                'signed': True if 'IS being signed!' in tsschecker.stdout else False
-            })
+                tsschecker = subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True)
+                firm['signed'] = True if 'IS being signed!' in tsschecker.stdout else False
 
     def write_api(self, path):
         if os.path.exists(path):
@@ -130,7 +114,7 @@ class BetaScraper:
         os.mkdir(path)
         for device in self.api.keys():
             with open(f'{path}/{device}', 'w') as f:
-                json.dump(sorted(self.api[device], key=lambda firm: firm['version'], reverse=True), f, indent=4)
+                json.dump(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True), f)
 
 def main():
     if platform.system() == 'Windows':
@@ -144,16 +128,13 @@ def main():
 
     print('[1] Scraping The iPhone Wiki...')
     pages = scraper.build_api()
-    print('[4] Writing out API...')
-    scraper.write_api('betas')
-    exit()
 
-    print('[3] Grabbing signing status (this will take a while, please wait)...')
+    print('[2] Grabbing signing status (this will take a while, please wait)...')
     with ThreadPoolExecutor() as executor:
-        for url in urls:
-            executor.submit(scraper.scrape_firm, url)
+        for device in scraper.api.keys():
+            executor.submit(scraper.get_signing_status, device)
 
-    print('[4] Writing out API...')
+    print('[3] Writing out API...')
     scraper.write_api('betas')
 
     print(f'Done! Took {round(time.time() - start_time)}s.')
