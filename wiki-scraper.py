@@ -17,13 +17,12 @@ import wikitextparser as wtp
 
 
 class BetaScraper:
-    def __init__(self, site):
+    def __init__(self, site: Site):
         self.site = site
         self.api = dict()
+        self.device_regex = re.compile(r'(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
 
-    def build_api(self):
-        device_regex = re.compile(r'(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
-        device_types = ('Apple TV', 'iPad', 'iPad Air', 'iPad Pro', 'iPad Mini', 'iPhone', 'iPod touch')
+    def build_api(self, device_types: tuple) -> None:
         for result in self.site.search('Beta Firmware/'):
             if ('.x' not in result['title']) or (not any(x in result['title'] for x in device_types)):
                 continue
@@ -40,7 +39,7 @@ class BetaScraper:
                     devices = list()
 
                     for device in wtp.parse(firm_data[next(template.index(x) for x in template if any(i in x for i in ('Codename', 'Keys')))]).wikilinks:
-                        regex = device_regex.match(str(device.text))
+                        regex = self.device_regex.match(str(device.text))
                         if regex is not None:
                             devices.append(regex.group())
 
@@ -82,7 +81,7 @@ class BetaScraper:
                         if not any(f['buildid'] == firm['buildid'] for f in self.api[devices[d]]):
                             self.api[devices[d]].append(firm)
 
-    def get_signing_status(self, device): #TODO: Remove tsschecker dependency
+    def get_signing_status(self, device: str) -> None: #TODO: Remove tsschecker dependency + make this a LOT quicker
         boardconfig = requests.get(f'https://api.ipsw.me/v4/device/{device}').json()['boards'][0]['boardconfig']
         with tempfile.TemporaryDirectory() as tmpdir:
             for firm in self.api[device]:
@@ -107,7 +106,7 @@ class BetaScraper:
                 tsschecker = subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True)
                 firm['signed'] = True if 'IS being signed!' in tsschecker.stdout else False
 
-    def write_api(self, path):
+    def write_api(self, path: str) -> None:
         if os.path.exists(path):
             shutil.rmtree(path)
 
@@ -127,7 +126,11 @@ def main():
     scraper = BetaScraper(Site('www.theiphonewiki.com'))
 
     print('[1] Scraping The iPhone Wiki...')
-    pages = scraper.build_api()
+    with ThreadPoolExecutor() as executor:
+        executor.submit(scraper.build_api, ('Apple TV',))
+        executor.submit(scraper.build_api, ('iPod touch',))
+        executor.submit(scraper.build_api, ('iPhone',))
+        executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))
 
     print('[2] Grabbing signing status (this will take a while, please wait)...')
     with ThreadPoolExecutor() as executor:
