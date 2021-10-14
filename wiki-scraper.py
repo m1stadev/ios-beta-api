@@ -43,16 +43,20 @@ class BetaScraper:
                         if regex is not None:
                             devices.append(regex.group())
 
+                    firm = dict()
+
                     version = wtp.parse(firm_data[0])
                     if version.wikilinks:
-                        version = firm_data[0].replace(str(version.wikilinks[0]), version.wikilinks[0].text)
+                        firm['version'] = firm_data[0].replace(str(version.wikilinks[0]), version.wikilinks[0].text)
                     else:
-                        version = firm_data[0]
+                        firm['version'] = firm_data[0]
 
-                    firm = {
-                        'version': version,
-                        'buildid': firm_data[1]
-                    }
+                    buildids = firm_data[1].split('   | ') # Can't use the mediawiki parser for this, unfortunately
+                    if len(buildids) > 1:
+                        buildids.pop(0)
+                        buildids.pop(-1)
+                        for b in range(len(buildids)):
+                            buildids[b] = buildids[b].split(' = ')[-1][:-1]
 
                     try:
                         ipsws = next(wtp.parse(item).external_links for item in firm_data if wtp.parse(item).external_links)
@@ -71,12 +75,17 @@ class BetaScraper:
                         continue
 
                     for d in range(len(devices)):
+                        firm_index = 0 if ((len(devices) == 4) and (d in (0, 1))) or ((len(devices) == 2 ) and (d == 0)) else 1
+                        firm['buildid'] = buildids[0]
+                        if len(buildids) > 1:
+                            firm['buildid'] = buildids[firm_index]
+
                         firm['url'] = ipsws[0].url
                         firm['size'] = ipsw_sizes[0]
 
-                        if (len(ipsws) > 1) and (d not in (0, 1)):
-                            firm['url'] = ipsws[1].url
-                            firm['size'] = ipsw_sizes[1]
+                        if len(ipsws) > 1:
+                            firm['url'] = ipsws[firm_index].url
+                            firm['size'] = ipsw_sizes[firm_index]
 
                         if len(firm.keys()) < 4: # Incomplete firmware info, skipping
                             continue
@@ -121,7 +130,7 @@ class BetaScraper:
             with open(f'{path}/{device}', 'w') as f:
                 json.dump(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True), f)
 
-def main():
+def main() -> None:
     if platform.system() == 'Windows':
         sys.exit('[ERROR] Windows is not supported. Exiting.')
 
