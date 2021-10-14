@@ -43,8 +43,14 @@ class BetaScraper:
                         if regex is not None:
                             devices.append(regex.group())
 
+                    version = wtp.parse(firm_data[0])
+                    if version.wikilinks:
+                        version = firm_data[0].replace(str(version.wikilinks[0]), version.wikilinks[0].text)
+                    else:
+                        version = firm_data[0]
+
                     firm = {
-                        'version': firm_data[0], #TODO: Fix parsing of GM/RC builds
+                        'version': version,
                         'buildid': firm_data[1]
                     }
 
