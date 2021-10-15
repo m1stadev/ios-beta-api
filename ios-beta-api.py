@@ -188,7 +188,7 @@ def start_api() -> None:
     api.run()
 
 def main() -> None:
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(2) as executor:
         executor.submit(start_api)
         executor.submit(run_scraper)
 
