@@ -1,3 +1,5 @@
+flask
 mwclient
 remotezip
 requests
+wikitextparser
