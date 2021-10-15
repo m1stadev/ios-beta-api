@@ -81,11 +81,11 @@ class BetaScraper:
                             firm['buildid'] = buildids[firm_index]
 
                         firm['url'] = ipsws[0].url
-                        firm['size'] = ipsw_sizes[0]
+                        firm['filesize'] = ipsw_sizes[0]
 
                         if len(ipsws) > 1:
                             firm['url'] = ipsws[firm_index].url
-                            firm['size'] = ipsw_sizes[firm_index]
+                            firm['filesize'] = ipsw_sizes[firm_index]
 
                         if len(firm.keys()) < 4: # Incomplete firmware info, skipping
                             continue
