@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from flask import Flask
 from mwclient import Site
 import json
-import os
 import platform
 import re
 import requests
 import remotezip
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import wikitextparser as wtp
 
+
+api = Flask('iOS Beta Firmware API')
 
 class BetaScraper:
     def __init__(self, site: Site):
@@ -121,41 +124,73 @@ class BetaScraper:
                 tsschecker = subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True)
                 firm['signed'] = True if 'IS being signed!' in tsschecker.stdout else False
 
-    def write_api(self, path: str) -> None:
-        if os.path.exists(path):
-            shutil.rmtree(path)
+    def output_data(self) -> None:
+        db = sqlite3.connect('betas.db')
+        cursor = db.cursor()
 
-        os.mkdir(path)
         for device in self.api.keys():
-            with open(f'{path}/{device}', 'w') as f:
-                json.dump(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True), f)
+            json_data = json.dumps(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True))
+            cursor.execute('INSERT INTO betas(identifier, firmwares) VALUES(?,?)', (device.lower(), json_data))
+            db.commit()
 
-def main() -> None:
+        db.close()
+
+
+@api.route('/betas/<identifier>', methods=['GET'])
+def get_firmwares(identifier: str) -> str:
+    db = sqlite3.connect('betas.db')
+    cursor = db.cursor()
+
+    cursor.execute('SELECT firmwares FROM betas WHERE identifier = ?', (identifier.lower(),))
+    firmwares = cursor.fetchone()
+    db.close()
+
+    if firmwares is not None:
+        return api.response_class(response=firmwares, mimetype='application/json')
+    else:
+        return api.response_class(status=404)
+
+
+def run_scraper() -> None: # Run scraper every half hour
     if platform.system() == 'Windows':
         sys.exit('[ERROR] Windows is not supported. Exiting.')
 
     if shutil.which('tsschecker') is None:
         sys.exit('[ERROR] tsschecker is not installed. Exiting.')
 
-    start_time = time.time()
-    scraper = BetaScraper(Site('www.theiphonewiki.com'))
+    while True:
+        scraper = BetaScraper(Site('www.theiphonewiki.com'))
+        with ThreadPoolExecutor() as executor:
+            scrapers = [executor.submit(scraper.build_api, ('Apple TV',)),
+            executor.submit(scraper.build_api, ('iPod touch',)),
+            executor.submit(scraper.build_api, ('iPhone',)),
+            executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))]
+            [scraper.result() for scraper in scrapers]
 
-    print('[1] Scraping The iPhone Wiki...')
-    with ThreadPoolExecutor() as executor:
-        executor.submit(scraper.build_api, ('Apple TV',))
-        executor.submit(scraper.build_api, ('iPod touch',))
-        executor.submit(scraper.build_api, ('iPhone',))
-        executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))
+            for device in scraper.api.keys():
+                executor.submit(scraper.get_signing_status, device)
 
-    print('[2] Grabbing signing status (this will take a while, please wait)...')
-    with ThreadPoolExecutor() as executor:
-        for device in scraper.api.keys():
-            executor.submit(scraper.get_signing_status, device)
+        scraper.output_data()
+        time.sleep(1800)
 
-    print('[3] Writing out API...')
-    scraper.write_api('betas')
+def start_api() -> None:
+    db = sqlite3.connect('betas.db')
+    cursor = db.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS betas(
+        identifier TEXT,
+        firmwares JSON
+        )
+        ''')
+    db.commit()
+    db.close()
 
-    print(f'Done! Took {round(time.time() - start_time)}s.')
+    api.run()
 
-if __name__ == "__main__":
+def main() -> None:
+    with ProcessPoolExecutor() as executor:
+        executor.submit(start_api)
+        executor.submit(run_scraper)
+
+if __name__ == '__main__':
     main()

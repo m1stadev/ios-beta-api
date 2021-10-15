@@ -1,3 +1,4 @@
+flask
 mwclient
 remotezip
 requests
