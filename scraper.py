@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-from flask import Flask
+from concurrent.futures import ThreadPoolExecutor
 from mwclient import Site
+from wikitextparser import parse as wikiparse
 import json
 import platform
 import re
-import requests
 import remotezip
+import requests
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-import wikitextparser as wtp
 
-
-api = Flask('iOS Beta Firmware API')
 
 class BetaScraper:
     def __init__(self, site: Site):
@@ -34,21 +31,21 @@ class BetaScraper:
             if major_version < 9 if 'Apple TV' not in result['title'] else 7: # All beta firmwares pre-iOS 9/tvOS 7 aren't IPSW beta firmwares
                 continue
 
-            wiki_page = wtp.parse(self.site.pages[result['title']].text())
+            wiki_page = wikiparse(self.site.pages[result['title']].text())
             for table in wiki_page.tables:
                 template = table.data()[0]
                 for firm in range(1, len(table.data())):
                     firm_data = [x for x in table.data()[firm] if x is not None]
                     devices = list()
 
-                    for device in wtp.parse(firm_data[next(template.index(x) for x in template if any(i in x for i in ('Codename', 'Keys')))]).wikilinks:
+                    for device in wikiparse(firm_data[next(template.index(x) for x in template if any(i in x for i in ('Codename', 'Keys')))]).wikilinks:
                         regex = self.device_regex.match(str(device.text))
                         if regex is not None:
                             devices.append(regex.group())
 
                     firm = dict()
 
-                    version = wtp.parse(firm_data[0])
+                    version = wikiparse(firm_data[0])
                     if version.wikilinks:
                         firm['version'] = firm_data[0].replace(str(version.wikilinks[0]), version.wikilinks[0].text)
                     else:
@@ -62,7 +59,7 @@ class BetaScraper:
                             buildids[b] = buildids[b].split(' = ')[-1][:-1]
 
                     try:
-                        ipsws = next(wtp.parse(item).external_links for item in firm_data if wtp.parse(item).external_links)
+                        ipsws = next(wikiparse(item).external_links for item in firm_data if wikiparse(item).external_links)
                     except: # No URLs for this firmware, skip
                         continue
 
@@ -136,22 +133,7 @@ class BetaScraper:
         db.close()
 
 
-@api.route('/betas/<identifier>', methods=['GET'])
-def get_firmwares(identifier: str) -> str:
-    db = sqlite3.connect('betas.db')
-    cursor = db.cursor()
-
-    cursor.execute('SELECT firmwares FROM betas WHERE identifier = ?', (identifier.lower(),))
-    firmwares = cursor.fetchone()
-    db.close()
-
-    if firmwares is not None:
-        return api.response_class(response=firmwares, mimetype='application/json')
-    else:
-        return api.response_class(status=404)
-
-
-def run_scraper() -> None: # Run scraper every half hour
+def main() -> None: # Run scraper every half hour
     if platform.system() == 'Windows':
         sys.exit('[ERROR] Windows is not supported. Exiting.')
 
@@ -173,24 +155,6 @@ def run_scraper() -> None: # Run scraper every half hour
         scraper.output_data()
         time.sleep(1800)
 
-def start_api() -> None:
-    db = sqlite3.connect('betas.db')
-    cursor = db.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS betas(
-        identifier TEXT,
-        firmwares JSON
-        )
-        ''')
-    db.commit()
-    db.close()
-
-    api.run()
-
-def main() -> None:
-    with ProcessPoolExecutor(2) as executor:
-        executor.submit(start_api)
-        executor.submit(run_scraper)
 
 if __name__ == '__main__':
     main()
