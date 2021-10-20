@@ -125,6 +125,14 @@ class BetaScraper:
         db = sqlite3.connect('betas.db')
         cursor = db.cursor()
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS betas(
+            identifier TEXT,
+            firmwares JSON
+            )
+            ''')
+        db.commit()
+
         for device in self.api.keys():
             json_data = json.dumps(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True))
             cursor.execute('INSERT INTO betas(identifier, firmwares) VALUES(?,?)', (device.lower(), json_data))
