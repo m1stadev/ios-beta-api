@@ -11,6 +11,14 @@ def get_firmwares(identifier: str) -> str:
     db = sqlite3.connect('betas.db')
     cursor = db.cursor()
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS betas(
+        identifier TEXT,
+        firmwares JSON
+        )
+        ''')
+    db.commit()
+
     cursor.execute('SELECT firmwares FROM betas WHERE identifier = ?', (identifier.lower(),))
     firmwares = cursor.fetchone()
     db.close()
