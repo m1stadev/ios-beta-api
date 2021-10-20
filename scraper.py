@@ -148,23 +148,22 @@ def main() -> None: # Run scraper every half hour
     if shutil.which('tsschecker') is None:
         sys.exit('[ERROR] tsschecker is not installed. Exiting.')
 
-    while True:
-        scraper = BetaScraper(Site('www.theiphonewiki.com'))
-        with ThreadPoolExecutor() as executor:
-            print('[1] Scraping beta iOS firmware info off of The iPhone Wiki...')
-            scrapers = [executor.submit(scraper.build_api, ('Apple TV',)),
-            executor.submit(scraper.build_api, ('iPod touch',)),
-            executor.submit(scraper.build_api, ('iPhone',)),
-            executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))]
-            [scraper.result() for scraper in scrapers]
+    start_time = time.time()
+    scraper = BetaScraper(Site('www.theiphonewiki.com'))
+    with ThreadPoolExecutor() as executor:
+        print('[1] Scraping beta iOS firmware info off of The iPhone Wiki...')
+        scrapers = [executor.submit(scraper.build_api, ('Apple TV',)),
+        executor.submit(scraper.build_api, ('iPod touch',)),
+        executor.submit(scraper.build_api, ('iPhone',)),
+        executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))]
+        [scraper.result() for scraper in scrapers]
 
-            print('[2] Getting signing status for firmwares...')
-            for device in scraper.api.keys():
-                executor.submit(scraper.get_signing_status, device)
+        print('[2] Getting signing status for firmwares...')
+        for device in scraper.api.keys():
+            executor.submit(scraper.get_signing_status, device)
 
-        scraper.output_data()
-        print('[3] Done!')
-        time.sleep(1800)
+    scraper.output_data()
+    print(f'[3] Done! Took {round(time.time() - start_time)}s.')
 
 
 if __name__ == '__main__':
