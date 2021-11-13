@@ -13,7 +13,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 import wikitextparser as wtp
 
 
