@@ -164,20 +164,23 @@ def run_scraper() -> None: # Run scraper every half hour
     if shutil.which('tsschecker') is None:
         sys.exit('[ERROR] tsschecker is not installed. Exiting.')
 
-    while True:
-        scraper = BetaScraper(Site('www.theiphonewiki.com'))
-        with ThreadPoolExecutor() as executor:
-            scrapers = [executor.submit(scraper.build_api, ('Apple TV',)),
-            executor.submit(scraper.build_api, ('iPod touch',)),
-            executor.submit(scraper.build_api, ('iPhone',)),
-            executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))]
+    with ThreadPoolExecutor() as executor:
+        while True:
+            scraper = BetaScraper(Site('www.theiphonewiki.com'))
+            scrapers = [
+                executor.submit(scraper.build_api, ('Apple TV',)),
+                executor.submit(scraper.build_api, ('iPod touch',)),
+                executor.submit(scraper.build_api, ('iPhone',)),
+                executor.submit(scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))
+                ]
             [scraper.result() for scraper in scrapers]
 
-            for device in scraper.api.keys():
-                executor.submit(scraper.get_signing_status, device)
+            signing_checkers = [
+                executor.submit(scraper.get_signing_status, device) for device in scraper.api.keys()
+            ]
+            [sign.result() for sign in signing_checkers]
 
-        scraper.output_data()
-        time.sleep(1800)
+            scraper.output_data()
 
 def start_api() -> None:
     db = sqlite3.connect('betas.db')
