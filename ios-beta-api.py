@@ -129,8 +129,14 @@ class BetaScraper:
         cursor = db.cursor()
 
         for device in self.api.keys():
+            cursor.execute('SELECT * FROM betas WHERE identifier = ?', (device.lower(),))
+            if cursor.fetchone() is not None:
+                sql = 'UPDATE betas SET firmwares = ? WHERE identifier = ?'
+            else:
+                sql = 'INSERT INTO betas(firmwares, identifier) VALUES (?,?)'
+
             json_data = json.dumps(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True))
-            cursor.execute('INSERT INTO betas(identifier, firmwares) VALUES(?,?)', (device.lower(), json_data))
+            cursor.execute(sql, (json_data, device.lower()))
             db.commit()
 
         db.close()
