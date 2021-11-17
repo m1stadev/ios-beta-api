@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from mwclient import Site
 from wikitextparser import parse as wikiparse
 import json
+import os
 import platform
 import re
 import remotezip
@@ -122,20 +123,19 @@ class BetaScraper:
                 firm['signed'] = True if 'IS being signed!' in tsschecker.stdout else False
 
     def output_data(self) -> None:
-        db = sqlite3.connect('betas.db')
+        db_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'betas.db')
+        db = sqlite3.connect(db_path)
         cursor = db.cursor()
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS betas(
-            identifier TEXT,
-            firmwares JSON
-            )
-            ''')
-        db.commit()
-
         for device in self.api.keys():
+            cursor.execute('SELECT * FROM betas WHERE identifier = ?', (device.lower(),))
+            if cursor.fetchone() is not None:
+                sql = 'UPDATE betas SET firmwares = ? WHERE identifier = ?'
+            else:
+                sql = 'INSERT INTO betas(firmwares, identifier) VALUES (?,?)'
+
             json_data = json.dumps(sorted(self.api[device], key=lambda firm: firm['buildid'], reverse=True))
-            cursor.execute('INSERT INTO betas(identifier, firmwares) VALUES(?,?)', (device.lower(), json_data))
+            cursor.execute(sql, (json_data, device.lower()))
             db.commit()
 
         db.close()
@@ -148,24 +148,34 @@ def main() -> None: # Run scraper every half hour
     if shutil.which('tsschecker') is None:
         sys.exit('[ERROR] tsschecker is not installed. Exiting.')
 
-    start_time = time.time()
-    beta_scraper = BetaScraper(Site('www.theiphonewiki.com'))
+    cached_api = dict()
     with ThreadPoolExecutor() as executor:
-        print('[1] Scraping beta iOS firmware info off of The iPhone Wiki...')
-        [scraper.result() for scraper in [
-            executor.submit(beta_scraper.build_api, ('Apple TV',)),
-            executor.submit(beta_scraper.build_api, ('iPod touch',)),
-            executor.submit(beta_scraper.build_api, ('iPhone',)),
-            executor.submit(beta_scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))
+        while True:
+            beta_scraper = BetaScraper(Site('www.theiphonewiki.com'))
+
+            start_time = time.time()
+            print('[1] Scraping beta iOS firmware info off of The iPhone Wiki...')
+            [scraper.result() for scraper in [
+                executor.submit(beta_scraper.build_api, ('Apple TV',)),
+                executor.submit(beta_scraper.build_api, ('iPod touch',)),
+                executor.submit(beta_scraper.build_api, ('iPhone',)),
+                executor.submit(beta_scraper.build_api, ('iPad', 'iPad Air', 'iPad Pro', 'iPad Mini'))
+                ]
             ]
-        ]
 
-        print('[2] Getting signing status for firmwares...')
-        for device in beta_scraper.api.keys():
-            executor.submit(beta_scraper.get_signing_status, device)
+            if beta_scraper.api == cached_api: # If the API hasn't changed, don't bother grabbing signing status
+                continue
 
-    beta_scraper.output_data()
-    print(f'[3] Done! Took {round(time.time() - start_time)}s.')
+            print('[2] Getting signing status for firmwares...')
+            [scraper.result() for scraper in [
+                executor.submit(beta_scraper.get_signing_status, device)
+                for device in beta_scraper.api.keys()
+                ]
+            ]
+
+            beta_scraper.output_data()
+            print(f'[3] Done! Took {round(time.time() - start_time)}s.')
+            cached_api = beta_scraper.api
 
 
 if __name__ == '__main__':
