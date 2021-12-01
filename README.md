@@ -1,5 +1,5 @@
 # iOS Beta Firmware API
-This is a python script that scrapes information on beta iOS firmwares from [The iPhone Wiki](https://www.theiphonewiki.com/), fetches the signing status of the firmwares, then serves the information as a Flask app, in a format similar to [IPSW.me](https://ipswdownloads.docs.apiary.io/)'s API.
+A Flask API that serves information on beta iOS firmwares based on scraped information from [The iPhone Wiki](https://www.theiphonewiki.com/), in a format similar to [IPSW.me](https://ipswdownloads.docs.apiary.io/)'s API.
 
 ## Requirements
 - A computer running macOS or Linux
