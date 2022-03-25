@@ -1,5 +1,7 @@
-flask
-mwclient
-remotezip
-requests
+aiohttp
+aiopath
+aiosqlite
+fastapi
+ujson
+uvicorn
 wikitextparser
