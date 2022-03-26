@@ -265,8 +265,6 @@ class WikiScraper:
                     'MESSAGE=SUCCESS' in await resp.text()
                 )
 
-        await self.output_device_data(device['identifier'])
-
     async def check_device_signed_firmwares(self, identifier: str) -> None:
         if self.ipsw_api is None:
             async with self.http_semaphore:
@@ -282,6 +280,8 @@ class WikiScraper:
         await asyncio.gather(
             *[self.check_firmware(device, firm) for firm in self.api[identifier]]
         )
+
+        await self.output_device_data(identifier)
 
     async def output_device_data(self, identifier: str) -> None:
         json_data = ujson.dumps(
@@ -341,6 +341,16 @@ async def get_firmwares(identifier: str) -> str:
 
 async def main() -> None:
     async with aiohttp.ClientSession() as session, aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            '''
+        CREATE TABLE IF NOT EXISTS betas(
+        identifier TEXT,
+        firmwares JSON
+        )
+        '''
+        )
+        await db.commit()
+
         while True:
             scraper = WikiScraper(session, db)
             await asyncio.gather(
