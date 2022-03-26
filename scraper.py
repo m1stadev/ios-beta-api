@@ -334,7 +334,7 @@ async def get_firmwares(identifier: str) -> str:
     try:
         return ujson.loads(firmwares[0])
     except:
-        return HTTPException(
+        raise HTTPException(
             status_code=404, detail=f"No beta firmwares available for '{identifier}'."
         )
 
