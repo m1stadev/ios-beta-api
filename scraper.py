@@ -27,7 +27,7 @@ TATSU_PARAMS = {'action': 2}
 TATSU_REQUEST = {
     'ApChipID': 0,
     'ApBoardID': 0,
-    'ApECID': 0,
+    'ApECID': 1,  # ECID 0 will make Tatsu mistakenly report some unsigned firmwares as signed
     'ApSecurityDomain': 1,
     'ApNonce': b'0',
     'ApProductionMode': True,
@@ -209,6 +209,7 @@ class WikiScraper:
                 if resp.status == 200:
                     return await resp.read()
 
+        async with self.http_semaphore:
             async with self.session.get(firm['url']) as resp:
                 if resp.status == 200:
                     return await asyncio.to_thread(self._sync_get_manifest, firm)
