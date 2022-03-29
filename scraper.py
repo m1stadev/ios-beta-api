@@ -164,6 +164,7 @@ class WikiScraper:
                     continue
 
                 for d in range(len(devices)):
+                    firm['identifier'] = devices[d]
                     firm_index = (
                         0
                         if ((len(devices) == 4) and (d in (0, 1)))
