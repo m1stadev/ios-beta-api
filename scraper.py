@@ -13,6 +13,7 @@ import re
 import time
 import ujson
 import wikitextparser as wtp
+import sys
 
 DB_PATH = aiopath.AsyncPath('betas.db')
 DEVICE_REGEX = re.compile(r'(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
@@ -373,6 +374,8 @@ async def main() -> None:
 
             for device in scraper.api.keys():
                 await scraper.check_device_signed_firmwares(device)
+
+            sys.exit()
 
 
 if __name__ == '__main__':
