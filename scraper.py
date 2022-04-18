@@ -13,7 +13,6 @@ import re
 import time
 import ujson
 import wikitextparser as wtp
-import sys
 
 DB_PATH = aiopath.AsyncPath('betas.db')
 DEVICE_REGEX = re.compile(r'(iPhone|AppleTV|iPad|iPod)[0-9]+,[0-9]+')
@@ -337,7 +336,7 @@ async def get_firmwares(identifier: str) -> str:
         return ujson.loads(firmwares[0])
     except:
         raise HTTPException(
-            status_code=404, detail=f"No beta firmwares available for '{identifier}'."
+            status_code=404, detail=f"Device identifier not found: '{identifier}'."
         )
 
 
@@ -375,7 +374,17 @@ async def main() -> None:
             for device in scraper.api.keys():
                 await scraper.check_device_signed_firmwares(device)
 
-            sys.exit()
+            async with session.get('https://api.ipsw.me/v4/devices') as resp:
+                ipsw_api = await resp.json()
+
+            for device in [
+                d['identifier'] for d in ipsw_api
+            ]:  # Add the rest of the device
+                if (
+                    device not in scraper.api.keys()
+                    and DEVICE_REGEX.match(device) is not None
+                ):
+                    scraper.api[device] = list()
 
 
 if __name__ == '__main__':
