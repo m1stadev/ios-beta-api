@@ -230,4 +230,4 @@ async def get_beta_firmwares(identifier: str) -> str:
 
 
 if __name__ == '__main__':
-    uvicorn.run(app='scraper:app', workers=2)
+    uvicorn.run(app='__main__:app', workers=2)
