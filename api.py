@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 
-from remotezip import RemoteZip
-from fastapi import FastAPI, HTTPException
-from typing import Optional
-
-import aiocache
-import aiohttp
-import aiosqlite
 import asyncio
 import plistlib
 import time
-import uvicorn
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
 
-APPLEDB_URL = 'https://api.appledb.dev/main.json'
+import aiohttp
+import aiosqlite
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from remotezip import RemoteZip
 
 TATSU_API = 'http://gs.apple.com/TSS/controller'
 TATSU_HEADERS = {
@@ -34,157 +33,234 @@ TATSU_REQUEST = {
 HTTP_SEMAPHORE = asyncio.Semaphore(100)
 
 
-async def get_appledb_data(session: aiohttp.ClientSession) -> dict:
-    async with session.get(APPLEDB_URL) as resp:
-        if resp.status != 200:
-            raise HTTPException(status_code=resp.status, detail=resp.reason)
+class AppleDB:
+    URL = 'https://api.appledb.dev/main.json'
 
-        return await resp.json()
+    def __init__(self, db: aiosqlite.Connection, session: aiohttp.ClientSession):
+        self._db = db
+        self._session = session
+        self._data = {'ios': [], 'device': []}
 
+    async def _scrape_device(self, device: dict) -> None:
+        async with self._db.execute(
+            'SELECT * FROM devices WHERE identifier = ? and boardconfig = ?',
+            (device['key'], device['board'][0]),
+        ) as cursor:
+            if await cursor.fetchone() is not None:
+                return
 
-async def get_device_data(session: aiohttp.ClientSession, identifier: str) -> dict:
-    data = await get_appledb_data(session)
-
-    for device in data['device']:
-        if any(identifier.casefold() == i.casefold() for i in device['identifier']):
-            return device
-
-    raise HTTPException(status_code=404, detail='Device not found')
-
-
-async def get_firmware_data(session: aiohttp.ClientSession, os_type: str) -> list:
-    data = await get_appledb_data(session)
-
-    return [i for i in data['ios'] if i['osType'].casefold() == os_type.casefold()]
-
-
-async def parse_firmware(
-    session: aiohttp.ClientSession, device: dict, firmware: dict
-) -> Optional[dict]:
-    # Confirm this is a beta firmware
-    if firmware['beta'] == False:
-        return
-
-    try:
-        firm_dict = {
-            'version': firmware['version'],
-            'buildid': firmware['build'],
-        }
-    except StopIteration:  # This firmware doesn't support this device
-        return
-
-    # Confirm there's actually URLs available
-    if 'sources' not in firmware.keys():
-        return
-
-    # Find some extra firmware data
-    for source in firmware['sources']:
-        if device['identifier'][0] not in source['deviceMap']:
-            continue
-
-        if source['type'] != 'ipsw':
-            continue
-
-        link = next(
-            (
-                i
-                for i in source['links']
-                if i['preferred'] == True and i['active'] == True
-            ),
-            None,
+        await self._db.execute(
+            'INSERT INTO devices(identifier, boardconfig) VALUES(?, ?)',
+            (device['key'], device['board'][0]),
         )
+        await self._db.commit()
 
-        if link is None:
-            try:
-                link = next(i for i in source['links'] if i['active'] == True)
-            except StopIteration:
+    async def _scrape_firmware(self, firmware: dict) -> None:
+        for source in firmware['sources']:
+            if source['type'] != 'ipsw':
                 continue
 
-        # TODO: Find a more efficient way to do this
-        async with session.head(link['url']) as resp:
+            async with self._db.execute(
+                'SELECT * FROM firmwares WHERE buildid = ? and devices = ?',
+                (firmware['build'], ', '.join(source['deviceMap'])),
+            ) as cursor:
+                if await cursor.fetchone() is not None:
+                    continue
+
+            for link in source['links']:
+                async with self._session.head(link['url'], timeout=5) as resp:
+                    if resp.status != 200:
+                        continue
+
+                    await self._db.execute(
+                        'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
+                        (
+                            firmware['version'],
+                            firmware['build'],
+                            link['url'],
+                            source['size'],
+                            ', '.join(source['deviceMap']),
+                        ),
+                    )
+                    await self._db.commit()
+
+                    # Scrape information from BuildManifest needed to check signing status
+                    for _ in range(5):
+                        try:
+                            manifest = await get_manifest(self._session, link['url'])
+                            if manifest is not None:
+                                break
+                        except:
+                            continue
+
+                    if manifest is None:
+                        continue
+
+                    manifest = plistlib.loads(manifest)
+                    for identity in manifest['BuildIdentities']:
+                        if 'RestoreBehavior' not in identity['Info'].keys():
+                            continue
+
+                        if identity['Info']['RestoreBehavior'] == 'Erase':
+                            continue
+
+                        async with self._db.execute(
+                            'SELECT * FROM buildmanifest WHERE boardconfig = ? AND buildid = ?',
+                            (
+                                identity['Info']['DeviceClass'],
+                                identity['Info']['BuildNumber'],
+                            ),
+                        ) as cursor:
+                            if await cursor.fetchone() is not None:
+                                continue
+
+                        await self._db.execute(
+                            'INSERT INTO buildmanifest(boardconfig, buildid, chip_id, board_id, unique_buildid) VALUES(?, ?, ?, ?, ?)',
+                            (
+                                identity['Info']['DeviceClass'],
+                                identity['Info']['BuildNumber'],
+                                int(identity['ApChipID'], 16),
+                                int(identity['ApBoardID'], 16),
+                                identity['UniqueBuildID'],
+                            ),
+                        )
+                        await self._db.commit()
+
+            else:
+                continue
+
+    async def _bound_scrape_firmware(self, firmware: dict) -> None:
+        async with HTTP_SEMAPHORE:
+            await self._scrape_firmware(firmware)
+
+    async def scrape_data(self) -> None:
+        async with self._session.get(self.URL) as resp:
             if resp.status != 200:
+                raise HTTPException(status_code=resp.status, detail=resp.reason)
+
+            data = await resp.json()
+
+        firmwares = []
+        for firm in data['ios']:
+            if firm in self._data['ios']:
                 continue
 
-        # Add firmware URL
-        firm_dict['url'] = link['url']
+            if firm['osStr'] not in ('iPadOS', 'iOS', 'Apple TV Software', 'tvOS'):
+                continue
 
-        # Add different hashes
-        # if 'sha1' in source['hashes'].keys():
-        #    firm_dict['sha1sum'] = source['hashes']['sha1']
+            if 'sources' not in firm.keys():
+                continue
 
-        # if 'md5' in source['hashes'].keys():
-        #    firm_dict['md5sum'] = source['hashes']['md5']
+            if firm['beta'] == False:
+                continue
 
-        # if 'sha2-256' in source['hashes'].keys():
-        #    firm_dict['sha256sum'] = source['hashes']['sha2-256']
+            firmwares.append(firm)
 
-        # Add file info
-        firm_dict['filesize'] = source['size']
+        devices = []
+        for device in data['device']:
+            if device in self._data['device']:
+                continue
 
-        break
+            if 'arch' not in device.keys() or 'arm' not in device['arch']:
+                continue
 
-    else:  # No valid data found, skip this firmware
-        return
+            if device['type'] not in (
+                'iPhone',
+                'iPad',
+                'iPad mini',
+                'iPad Air',
+                'iPad Pro',
+                'Apple TV',
+            ):
+                continue
 
+            if len(device['board']) == 0:
+                continue
+
+            devices.append(device)
+
+        firmwares.sort(key=lambda x: x['build'], reverse=True)
+
+        async with asyncio.TaskGroup() as tg:
+            for device in devices:
+                tg.create_task(self._scrape_device(device))
+
+            for firmware in firmwares:
+                tg.create_task(self._bound_scrape_firmware(firmware))
+
+            while len(tg._tasks) > 0:
+                print(f'remaining tasks: {len(tg._tasks)}')
+                if len(tg._tasks) == 1:
+                    print(tg._tasks[0].get_coro())
+                await asyncio.sleep(1)
+
+        self._data = data
+
+
+def _sync_get_manifest(url: str) -> Optional[bytes]:
     try:
-        manifest = plistlib.loads(await get_manifest(session, firm_dict))
-    except:  # Failed to download/parse manifest, can't check signing status
-        return
-
-    signed = await check_firmware(session, device, firm_dict, manifest)
-    if signed is None:
-        return
-
-    firm_dict['signed'] = signed
-    return firm_dict
-
-
-def _sync_get_manifest(firmware: dict) -> Optional[bytes]:
-    try:
-        with RemoteZip(firmware['url']) as ipsw:
+        with RemoteZip(url) as ipsw:
             return ipsw.read(next(f for f in ipsw.namelist() if 'BuildManifest' in f))
     except:
         return None
 
 
-async def get_manifest(
-    session: aiohttp.ClientSession, firmware: dict
-) -> Optional[bytes]:
-    async with HTTP_SEMAPHORE:
-        async with session.get(
-            f"{'/'.join(firmware['url'].split('/')[:-1])}/BuildManifest.plist"
-        ) as resp:
-            if resp.status == 200:
-                return await resp.read()
+async def get_manifest(session: aiohttp.ClientSession, url: str) -> Optional[bytes]:
+    manifest_url = urlparse(url)
+    manifest_url = manifest_url._replace(
+        path=str(Path(manifest_url.path).parents[0] / 'BuildManifest.plist')
+    ).geturl()
 
-        async with session.get(firmware['url']) as resp:
-            if resp.status == 200:
-                return await asyncio.to_thread(_sync_get_manifest, firmware)
+    async with session.get(manifest_url) as resp:
+        if resp.status == 200:
+            return await resp.read()
 
-        return None
+        else:
+            return await asyncio.to_thread(_sync_get_manifest, url)
 
 
-async def check_firmware(
-    session: aiohttp.ClientSession, device: dict, firmware: dict, manifest: dict
-) -> Optional[bool]:
-    for i in manifest['BuildIdentities']:
-        if (
-            i['Info']['DeviceClass'].casefold() == device['board'][0].casefold()
-            and i['Info']['RestoreBehavior'] == 'Erase'
-        ):
-            identity = i
-            break
-    else:
-        return
+async def _is_firmware_signed(
+    db: aiosqlite.Connection,
+    session: aiohttp.ClientSession,
+    identifier: str,
+    firmware: dict,
+) -> dict:
+    async with db.execute(
+        'SELECT boardconfig FROM devices WHERE identifier LIKE ?',
+        (f'%{identifier}%',),
+    ) as cursor:
+        try:
+            boardconfig = (await cursor.fetchone())[0]
+        except TypeError:
+            return
+
+    async with db.execute(
+        'SELECT chip_id, board_id, unique_buildid FROM buildmanifest WHERE boardconfig LIKE ? AND buildid = ?',
+        (f'%{boardconfig}%', firmware['buildid']),
+    ) as cursor:
+        try:
+            chip_id, board_id, unique_buildid = await cursor.fetchone()
+        except TypeError:
+            # delete firmware so it can be parsed again later
+            await db.execute(
+                'DELETE FROM firmwares WHERE buildid = ? AND devices LIKE ?',
+                (firmware['buildid'], f'%{identifier}%'),
+            )
+            await db.commit()
+
+            print(
+                f'could not find buildmanifest data for {boardconfig} {firmware["buildid"]}, deleting firmware data'
+            )
+            return
 
     tss_request = {
-        'ApChipID': int(identity['ApChipID'], 16),
-        'ApBoardID': int(identity['ApBoardID'], 16),
+        'ApChipID': chip_id,
+        'ApBoardID': board_id,
         'ApECID': 1,  # ECID 0 will make Tatsu mistakenly report some unsigned firmwares as signed
         'ApSecurityDomain': 1,
         'ApNonce': b'0',
         'ApProductionMode': True,
-        'UniqueBuildID': identity['UniqueBuildID'],
+        'UniqueBuildID': unique_buildid,
     }
 
     if 0x8900 <= tss_request['ApChipID'] < 0x8960:  # 32-bit
@@ -194,17 +270,79 @@ async def check_firmware(
         tss_request['ApSecurityMode'] = True
         tss_request['SepNonce'] = b'0'
 
+    async with session.post(
+        TATSU_API,
+        data=plistlib.dumps(tss_request),
+        headers=TATSU_HEADERS,
+        params=TATSU_PARAMS,
+    ) as resp:
+        firmware['signed'] = 'MESSAGE=SUCCESS' in await resp.text()
+
+    return firmware
+
+
+async def is_firmware_signed(
+    db: aiosqlite.Connection,
+    session: aiohttp.ClientSession,
+    identifier: str,
+    firmware: dict,
+) -> bool:
     async with HTTP_SEMAPHORE:
-        async with session.post(
-            TATSU_API,
-            data=plistlib.dumps(tss_request),
-            headers=TATSU_HEADERS,
-            params=TATSU_PARAMS,
-        ) as resp:
-            return 'MESSAGE=SUCCESS' in await resp.text()
+        return await _is_firmware_signed(db, session, identifier, firmware)
 
 
 app = FastAPI()
+
+
+async def main() -> None:
+    async with aiosqlite.connect('betas.db') as db, aiohttp.ClientSession() as session:
+        await db.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS firmwares(
+            version TEXT,
+            buildid TEXT,
+            url TEXT,
+            size INTEGER,
+            devices TEXT
+            )
+            '''
+        )
+        await db.commit()
+
+        await db.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS devices(
+            identifier TEXT,
+            boardconfig TEXT
+            )
+            '''
+        )
+        await db.commit()
+
+        await db.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS buildmanifest(
+            boardconfig TEXT,
+            buildid TEXT,
+            chip_id INTEGER,
+            board_id INTEGER,
+            unique_buildid BLOB
+            )
+            '''
+        )
+        await db.commit()
+
+        appledb = AppleDB(db, session)
+        while True:
+            print('start')
+            await appledb.scrape_data()
+            print('end')
+            await asyncio.sleep(60)
+
+
+@app.on_event('startup')
+async def startup_event():
+    asyncio.create_task(main())
 
 
 @app.middleware('http')
@@ -217,17 +355,31 @@ async def add_process_time_header(request, call_next):
 
 @app.get('/betas/{identifier}')
 async def get_beta_firmwares(identifier: str) -> str:
-    async with aiohttp.ClientSession() as session:
-        device = await get_device_data(session, identifier)
-        data = await asyncio.gather(
-            *[
-                parse_firmware(session, device, firm)
-                for firm in await get_firmware_data(session=session, os_type='iOS')
-            ]
-        )
+    async with aiosqlite.connect('betas.db') as db:
+        async with db.execute(
+            'SELECT version, buildid, size, url FROM firmwares WHERE devices LIKE ?',
+            (f'%{identifier}%',),
+        ) as cursor:
+            firmwares = []
+            for firm_tuple in await cursor.fetchall():
+                firmwares.append(
+                    {
+                        'version': firm_tuple[0],
+                        'buildid': firm_tuple[1],
+                        'filesize': firm_tuple[2],
+                        'url': firm_tuple[3],
+                    }
+                )
 
-        return [i for i in data if i is not None][::-1]
+        async with aiohttp.ClientSession() as session, asyncio.TaskGroup() as tg:
+            tasks = [
+                tg.create_task(is_firmware_signed(db, session, identifier, firmware))
+                for firmware in firmwares
+            ]
+
+        firmwares = [task.result() for task in tasks if task.result() is not None]
+        return sorted(firmwares, key=lambda x: x['buildid'], reverse=True)
 
 
 if __name__ == '__main__':
-    uvicorn.run(app='__main__:app', workers=2)
+    uvicorn.run(app='__main__:app')
