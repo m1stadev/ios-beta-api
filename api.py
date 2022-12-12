@@ -11,6 +11,7 @@ import aiohttp
 import aiosqlite
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from remotezip import RemoteZip
 
 TATSU_API = 'http://gs.apple.com/TSS/controller'
@@ -286,6 +287,8 @@ async def is_firmware_signed(
 
 
 app = FastAPI()
+
+app.add_middleware(CORSMiddleware, allow_origins=['*'])
 
 
 async def main() -> None:
