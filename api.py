@@ -189,9 +189,6 @@ class AppleDB:
                 tg.create_task(self._bound_scrape_firmware(firmware))
 
             while len(tg._tasks) > 0:
-                print(f'remaining tasks: {len(tg._tasks)}')
-                if len(tg._tasks) == 1:
-                    print(tg._tasks[0].get_coro())
                 await asyncio.sleep(1)
 
         self._data = data
@@ -248,9 +245,6 @@ async def _is_firmware_signed(
             )
             await db.commit()
 
-            print(
-                f'could not find buildmanifest data for {boardconfig} {firmware["buildid"]}, deleting firmware data'
-            )
             return
 
     tss_request = {
@@ -334,9 +328,7 @@ async def main() -> None:
 
         appledb = AppleDB(db, session)
         while True:
-            print('start')
             await appledb.scrape_data()
-            print('end')
             await asyncio.sleep(60)
 
 
