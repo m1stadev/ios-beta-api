@@ -152,7 +152,7 @@ class AppleDB:
             if 'sources' not in firm.keys():
                 continue
 
-            if firm['beta'] == False:
+            if firm['beta'] == False and firm.get('rc', False) == False:
                 continue
 
             firmwares.append(firm)
