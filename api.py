@@ -40,21 +40,16 @@ class AppleDB:
     def __init__(self, db: aiosqlite.Connection, session: aiohttp.ClientSession):
         self._db = db
         self._session = session
-        self._data = {'ios': [], 'device': []}
 
     async def _scrape_device(self, device: dict) -> None:
-        async with self._db.execute(
-            'SELECT * FROM devices WHERE identifier = ? and boardconfig = ?',
-            (device['key'], device['board'][0]),
-        ) as cursor:
-            if await cursor.fetchone() is not None:
-                return
-
-        await self._db.execute(
-            'INSERT INTO devices(identifier, boardconfig) VALUES(?, ?)',
-            (device['key'], device['board'][0]),
-        )
-        await self._db.commit()
+        try:
+            await self._db.execute(
+                'INSERT INTO devices(identifier, boardconfig) VALUES(?, ?)',
+                (device['key'], device['board'][0]),
+            )
+            await self._db.commit()
+        except aiosqlite.IntegrityError:
+            pass
 
     async def _scrape_firmware(self, firmware: dict) -> None:
         for source in firmware['sources']:
@@ -62,68 +57,65 @@ class AppleDB:
                 continue
 
             for link in source['links']:
-                try:
-                    async with self._session.head(link['url'], timeout=5) as resp:
-                        if resp.status != 200:
-                            continue
+                async with self._session.head(link['url']) as resp:
+                    if resp.status != 200:
+                        continue
 
-                        url = link['url']
-                        size = resp.headers['Content-Length']
-                        supported_devices = ', '.join(source['deviceMap'])
-                        break
-                except asyncio.TimeoutError:
-                    continue
-            else:
-                continue
-
-        # Scrape information from BuildManifest needed to check signing status
-        for _ in range(5):
-            try:
-                manifest = await get_manifest(self._session, url)
-                if manifest is not None:
+                    url = link['url']
+                    size = resp.headers['Content-Length']
+                    supported_devices = ', '.join(source['deviceMap'])
                     break
-            except:
-                continue
-        else:
-            return
-
-        try:
-            await self._db.execute(
-                'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
-                (
-                    firmware['version'],
-                    firmware['build'],
-                    url,
-                    size,
-                    supported_devices,
-                ),
-            )
-            await self._db.commit()
-        except aiosqlite.IntegrityError:
-            return
-
-        manifest = plistlib.loads(manifest)
-        for identity in manifest['BuildIdentities']:
-            if 'RestoreBehavior' not in identity['Info'].keys():
-                continue
-
-            if identity['Info']['RestoreBehavior'] != 'Erase':
+            else:
                 continue
 
             try:
                 await self._db.execute(
-                    'INSERT INTO buildmanifest(boardconfig, buildid, chip_id, board_id, unique_buildid) VALUES(?, ?, ?, ?, ?)',
+                    'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
                     (
-                        identity['Info']['DeviceClass'],
-                        identity['Info']['BuildNumber'],
-                        int(identity['ApChipID'], 16),
-                        int(identity['ApBoardID'], 16),
-                        identity['UniqueBuildID'],
+                        firmware['version'],
+                        firmware['build'],
+                        url,
+                        size,
+                        supported_devices,
                     ),
                 )
                 await self._db.commit()
             except aiosqlite.IntegrityError:
-                continue
+                return
+
+            # Scrape information from BuildManifest needed to check signing status
+            for _ in range(3):
+                try:
+                    manifest = await get_manifest(self._session, url)
+                    if manifest is not None:
+                        break
+                except:
+                    continue
+            else:
+                return
+
+            manifest = plistlib.loads(manifest)
+            for identity in manifest['BuildIdentities']:
+                if 'RestoreBehavior' not in identity['Info'].keys():
+                    continue
+
+                if identity['Info']['RestoreBehavior'] != 'Erase':
+                    continue
+
+                try:
+                    await self._db.execute(
+                        'INSERT INTO buildmanifest(boardconfig, buildid, chip_id, board_id, unique_buildid) VALUES(?, ?, ?, ?, ?)',
+                        (
+                            identity['Info']['DeviceClass'],
+                            identity['Info']['BuildNumber'],
+                            int(identity['ApChipID'], 16),
+                            int(identity['ApBoardID'], 16),
+                            identity['UniqueBuildID'],
+                        ),
+                    )
+                    await self._db.commit()
+                except aiosqlite.IntegrityError:
+                    continue
 
     async def _bound_scrape_firmware(self, firmware: dict) -> None:
         async with HTTP_SEMAPHORE:
@@ -138,9 +130,6 @@ class AppleDB:
 
         firmwares = []
         for firm in data['ios']:
-            if firm in self._data['ios']:
-                continue
-
             if firm['osStr'] not in ('iPadOS', 'iOS', 'Apple TV Software', 'tvOS'):
                 continue
 
@@ -154,9 +143,6 @@ class AppleDB:
 
         devices = []
         for device in data['device']:
-            if device in self._data['device']:
-                continue
-
             if 'arch' not in device.keys() or 'arm' not in device['arch']:
                 continue
 
@@ -183,8 +169,6 @@ class AppleDB:
 
             for firmware in firmwares:
                 tg.create_task(self._bound_scrape_firmware(firmware))
-
-        self._data = data
 
 
 def _sync_get_manifest(url: str) -> Optional[bytes]:
@@ -334,7 +318,7 @@ async def main() -> None:
         appledb = AppleDB(db, session)
         while True:
             await appledb.scrape_data()
-            await asyncio.sleep(60)
+            await asyncio.sleep(300)
 
 
 @app.on_event('startup')
@@ -344,9 +328,10 @@ async def startup_event():
 
 @app.middleware('http')
 async def add_process_time_header(request, call_next):
-    start_time = time.time()
+    start_time = await asyncio.to_thread(time.time)
     response = await call_next(request)
-    response.headers['X-Process-Time'] = str(f'{time.time() - start_time:0.4f} sec')
+    finish_time = await asyncio.to_thread(time.time)
+    response.headers['X-Process-Time'] = str(f'{(finish_time - start_time):0.4f} sec')
     return response
 
 
