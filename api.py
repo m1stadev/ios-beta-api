@@ -376,4 +376,4 @@ async def get_beta_firmwares(identifier: str) -> str:
 
 
 if __name__ == '__main__':
-    uvicorn.run(app='__main__:app')
+    uvicorn.run(app='__main__:app', uds='ios-beta-api.sock')
