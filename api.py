@@ -57,14 +57,20 @@ class AppleDB:
                 continue
 
             for link in source['links']:
-                async with self._session.head(link['url']) as resp:
-                    if resp.status != 200:
-                        continue
+                for _ in range(3):
+                    async with self._session.head(link['url']) as resp:
+                        if resp.status != 200:
+                            continue
 
-                    url = link['url']
-                    size = resp.headers['Content-Length']
-                    supported_devices = ', '.join(source['deviceMap'])
-                    break
+                        url = link['url']
+                        size = resp.headers['Content-Length']
+                        supported_devices = ', '.join(source['deviceMap'])
+                        break
+                else:
+                    continue
+
+                break
+
             else:
                 continue
 
