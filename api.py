@@ -62,14 +62,17 @@ class AppleDB:
                 continue
 
             for link in source['links']:
-                async with self._session.head(link['url'], timeout=5) as resp:
-                    if resp.status != 200:
-                        continue
+                try:
+                    async with self._session.head(link['url'], timeout=5) as resp:
+                        if resp.status != 200:
+                            continue
 
-                    url = link['url']
-                    size = resp.headers['Content-Length']
-                    supported_devices = ', '.join(source['deviceMap'])
-                    break
+                        url = link['url']
+                        size = resp.headers['Content-Length']
+                        supported_devices = ', '.join(source['deviceMap'])
+                        break
+                except asyncio.TimeoutError:
+                    continue
             else:
                 continue
 
@@ -144,7 +147,7 @@ class AppleDB:
             if 'sources' not in firm.keys():
                 continue
 
-            if firm['beta'] == False and firm.get('rc', False) == False:
+            if firm['beta'] == False and firm['rc'] == False:
                 continue
 
             firmwares.append(firm)
