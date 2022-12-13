@@ -61,73 +61,62 @@ class AppleDB:
             if source['type'] != 'ipsw':
                 continue
 
-            async with self._db.execute(
-                'SELECT * FROM firmwares WHERE buildid = ? and devices = ?',
-                (firmware['build'], ', '.join(source['deviceMap'])),
-            ) as cursor:
-                if await cursor.fetchone() is not None:
-                    continue
-
             for link in source['links']:
                 async with self._session.head(link['url'], timeout=5) as resp:
                     if resp.status != 200:
                         continue
 
-                    await self._db.execute(
-                        'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
-                        (
-                            firmware['version'],
-                            firmware['build'],
-                            link['url'],
-                            resp.headers['Content-Length'],
-                            ', '.join(source['deviceMap']),
-                        ),
-                    )
-                    await self._db.commit()
-
-                    # Scrape information from BuildManifest needed to check signing status
-                    for _ in range(5):
-                        try:
-                            manifest = await get_manifest(self._session, link['url'])
-                            if manifest is not None:
-                                break
-                        except:
-                            continue
-
-                    if manifest is None:
-                        continue
-
-                    manifest = plistlib.loads(manifest)
-                    for identity in manifest['BuildIdentities']:
-                        if 'RestoreBehavior' not in identity['Info'].keys():
-                            continue
-
-                        if identity['Info']['RestoreBehavior'] == 'Erase':
-                            continue
-
-                        async with self._db.execute(
-                            'SELECT * FROM buildmanifest WHERE boardconfig = ? AND buildid = ?',
-                            (
-                                identity['Info']['DeviceClass'],
-                                identity['Info']['BuildNumber'],
-                            ),
-                        ) as cursor:
-                            if await cursor.fetchone() is not None:
-                                continue
-
-                        await self._db.execute(
-                            'INSERT INTO buildmanifest(boardconfig, buildid, chip_id, board_id, unique_buildid) VALUES(?, ?, ?, ?, ?)',
-                            (
-                                identity['Info']['DeviceClass'],
-                                identity['Info']['BuildNumber'],
-                                int(identity['ApChipID'], 16),
-                                int(identity['ApBoardID'], 16),
-                                identity['UniqueBuildID'],
-                            ),
-                        )
-                        await self._db.commit()
-
+                    url = link['url']
+                    size = resp.headers['Content-Length']
+                    break
             else:
+                continue
+
+            try:
+                await self._db.execute(
+                    'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
+                    (
+                        firmware['version'],
+                        firmware['build'],
+                        url,
+                        size,
+                        ', '.join(source['deviceMap']),
+                    ),
+                )
+                await self._db.commit()
+            except aiosqlite.IntegrityError:
+                continue
+
+        # Scrape information from BuildManifest needed to check signing status
+        for _ in range(5):
+            try:
+                manifest = await get_manifest(self._session, url)
+                if manifest is not None:
+                    break
+            except:
+                continue
+
+        manifest = plistlib.loads(manifest)
+        for identity in manifest['BuildIdentities']:
+            if 'RestoreBehavior' not in identity['Info'].keys():
+                continue
+
+            if identity['Info']['RestoreBehavior'] != 'Erase':
+                continue
+
+            try:
+                await self._db.execute(
+                    'INSERT INTO buildmanifest(boardconfig, buildid, chip_id, board_id, unique_buildid) VALUES(?, ?, ?, ?, ?)',
+                    (
+                        identity['Info']['DeviceClass'],
+                        identity['Info']['BuildNumber'],
+                        int(identity['ApChipID'], 16),
+                        int(identity['ApBoardID'], 16),
+                        identity['UniqueBuildID'],
+                    ),
+                )
+                await self._db.commit()
+            except aiosqlite.IntegrityError:
                 continue
 
     async def _bound_scrape_firmware(self, firmware: dict) -> None:
@@ -188,9 +177,6 @@ class AppleDB:
 
             for firmware in firmwares:
                 tg.create_task(self._bound_scrape_firmware(firmware))
-
-            while len(tg._tasks) > 0:
-                await asyncio.sleep(1)
 
         self._data = data
 
@@ -307,10 +293,15 @@ async def main() -> None:
         await db.commit()
 
         await db.execute(
+            '''CREATE UNIQUE INDEX IF NOT EXISTS firmware_for_devices ON firmwares(buildid, devices)'''
+        )
+        await db.commit()
+
+        await db.execute(
             '''
             CREATE TABLE IF NOT EXISTS devices(
-            identifier TEXT,
-            boardconfig TEXT
+            identifier TEXT UNIQUE,
+            boardconfig TEXT UNIQUE
             )
             '''
         )
@@ -323,9 +314,14 @@ async def main() -> None:
             buildid TEXT,
             chip_id INTEGER,
             board_id INTEGER,
-            unique_buildid BLOB
+            unique_buildid BLOB UNIQUE
             )
             '''
+        )
+        await db.commit()
+
+        await db.execute(
+            '''CREATE UNIQUE INDEX IF NOT EXISTS unique_buildid_for_device_firmware ON buildmanifest(boardconfig, buildid)'''
         )
         await db.commit()
 
