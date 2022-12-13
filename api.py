@@ -68,23 +68,9 @@ class AppleDB:
 
                     url = link['url']
                     size = resp.headers['Content-Length']
+                    supported_devices = ', '.join(source['deviceMap'])
                     break
             else:
-                continue
-
-            try:
-                await self._db.execute(
-                    'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
-                    (
-                        firmware['version'],
-                        firmware['build'],
-                        url,
-                        size,
-                        ', '.join(source['deviceMap']),
-                    ),
-                )
-                await self._db.commit()
-            except aiosqlite.IntegrityError:
                 continue
 
         # Scrape information from BuildManifest needed to check signing status
@@ -95,6 +81,23 @@ class AppleDB:
                     break
             except:
                 continue
+        else:
+            return
+
+        try:
+            await self._db.execute(
+                'INSERT INTO firmwares(version, buildid, url, size, devices) VALUES(?, ?, ?, ?, ?)',
+                (
+                    firmware['version'],
+                    firmware['build'],
+                    url,
+                    size,
+                    supported_devices,
+                ),
+            )
+            await self._db.commit()
+        except aiosqlite.IntegrityError:
+            return
 
         manifest = plistlib.loads(manifest)
         for identity in manifest['BuildIdentities']:
