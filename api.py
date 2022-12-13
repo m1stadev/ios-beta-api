@@ -79,7 +79,7 @@ class AppleDB:
                             firmware['version'],
                             firmware['build'],
                             link['url'],
-                            source['size'],
+                            resp.headers['Content-Length'],
                             ', '.join(source['deviceMap']),
                         ),
                     )
