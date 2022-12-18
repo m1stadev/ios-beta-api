@@ -158,6 +158,7 @@ class AppleDB:
                 'iPad Air',
                 'iPad Pro',
                 'Apple TV',
+                'iPod touch',
             ):
                 continue
 
